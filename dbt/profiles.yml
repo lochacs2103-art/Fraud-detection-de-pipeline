@@ -1,4 +1,4 @@
-momo_fraud:
+fintech_fraud:
   target: dev
   outputs:
     dev:

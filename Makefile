@@ -15,7 +15,7 @@ DBT_DIR       := --profiles-dir /home/airflow/dbt --project-dir /home/airflow/db
 
 # Default target
 help:
-	@echo "MoMo Fraud Detection Pipeline"
+	@echo "Fintech Fraud Detection Pipeline"
 	@echo ""
 	@echo "Setup (chạy lần đầu theo thứ tự):"
 	@echo "  make download-jars  — Download PostgreSQL JDBC driver"
@@ -70,7 +70,7 @@ up:
 	docker compose -f docker/docker-compose.yml up -d --build
 	@echo ""
 	@echo "Services:"
-	@echo "  Source DB:      postgresql://localhost:5432/momo_source  (momo/momo)"
+	@echo "  Source DB:      postgresql://localhost:5432/fintech_source  (fintech/fintech)"
 	@echo "  HDFS Web UI:    http://localhost:9870"
 	@echo "  Spark Web UI:   http://localhost:8081"
 	@echo "  Trino UI:       http://localhost:8082"
@@ -79,7 +79,7 @@ up:
 
 source-db-check:
 	@echo "Checking source DB row counts..."
-	docker exec source-db psql -U momo -d momo_source -c \
+	docker exec source-db psql -U fintech -d fintech_source -c \
 		"SELECT tablename, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
 
 down:

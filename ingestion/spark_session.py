@@ -46,7 +46,7 @@ def get_spark_session(app_name: str = None, local_mode: bool = False) -> SparkSe
     """
     config = _load_spark_config()
 
-    name = app_name or config.get("app_name", "momo_pipeline")
+    name = app_name or config.get("app_name", "fintech_pipeline")
 
     # Determine master
     if local_mode or os.getenv("SPARK_LOCAL_MODE", "false").lower() == "true":

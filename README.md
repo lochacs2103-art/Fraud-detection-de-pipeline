@@ -1,4 +1,4 @@
-# MoMo Fraud Detection — Data Engineering Pipeline
+# Fintech Fraud Detection — Data Engineering Pipeline
 
 Enterprise-grade batch data pipeline cho bài toán fraud detection tại fintech.
 
@@ -115,7 +115,7 @@ docker exec airflow-webserver airflow connections add spark_default \
 | Trino UI | http://localhost:8082 | — |
 | Airflow UI | http://localhost:8083 | admin/admin |
 | Superset UI | http://localhost:8088 | admin/admin |
-| Source DB | localhost:5432/momo_source | momo/momo |
+| Source DB | localhost:5432/fintech_source | fintech/fintech |
 
 ## Directory Structure
 

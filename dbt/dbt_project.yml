@@ -1,18 +1,18 @@
-name: momo_fraud
+name: fintech_fraud
 version: '1.0.0'
 config-version: 2
 
-profile: momo_fraud
+profile: fintech_fraud
 
 model-paths: ["models"]
 test-paths:  ["tests"]
 
 dispatch:
   - macro_namespace: dbt
-    search_order: ['momo_fraud', 'dbt']
+    search_order: ['fintech_fraud', 'dbt']
 
 models:
-  momo_fraud:
+  fintech_fraud:
     staging:
       +materialized: view
       +schema: staging

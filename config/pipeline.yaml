@@ -8,7 +8,7 @@ defaults:
   - _self_
 
 project:
-  name: momo_fraud_detection
+  name: fintech_fraud_detection
   env: dev   # dev | staging | prod
 
 # Data paths trên host machine (tương đối với project root)

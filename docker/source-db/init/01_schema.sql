@@ -1,6 +1,6 @@
 -- ============================================================
 -- Source Database Schema
--- Giả lập operational database của MoMo
+-- Giả lập operational database của Fintech
 -- Data từ CSV sẽ được COPY vào các tables này
 --
 -- Tại sao tất cả columns là TEXT?

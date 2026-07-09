@@ -1,7 +1,7 @@
 version: "3.8"
 
 # ============================================================
-# MoMo Fraud Detection — Full Data Engineering Stack
+# Fintech Fraud Detection — Full Data Engineering Stack
 # WSL2-compatible: config files baked into images via build context
 # No bind-mounts for config files — avoids WSL2 read-only filesystem errors
 # ============================================================
@@ -40,14 +40,14 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: momo_source
-      POSTGRES_USER: momo
-      POSTGRES_PASSWORD: momo
+      POSTGRES_DB: fintech_source
+      POSTGRES_USER: fintech
+      POSTGRES_PASSWORD: fintech
     volumes:
       - source_db_data:/var/lib/postgresql/data
       - ./source-db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U momo -d momo_source"]
+      test: ["CMD-SHELL", "pg_isready -U fintech -d fintech_source"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -272,7 +272,7 @@ services:
         airflow users create \
           --username admin --password admin \
           --firstname Admin --lastname User \
-          --role Admin --email admin@momo.vn
+          --role Admin --email admin@fintech.vn
     restart: "no"
 
   airflow-webserver:
@@ -308,7 +308,7 @@ services:
     ports:
       - "8088:8088"
     environment:
-      SUPERSET_SECRET_KEY: "momo_de_project_secret_key_2024"
+      SUPERSET_SECRET_KEY: "fintech_de_project_secret_key_2024"
       SUPERSET_LOAD_EXAMPLES: "no"
       DATABASE_URL: "sqlite:////app/superset_home/superset.db"
     volumes:
@@ -316,7 +316,7 @@ services:
     command: >
       bash -c "
         superset db upgrade &&
-        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@momo.vn --password admin &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@fintech.vn --password admin &&
         superset init &&
         superset run -h 0.0.0.0 -p 8088
       "

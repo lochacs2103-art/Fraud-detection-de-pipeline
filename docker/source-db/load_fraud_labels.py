@@ -17,9 +17,9 @@ FRAUD_LABELS_PATH = PROJECT_ROOT / "data" / "raw" / "train_fraud_labels.json"
 conn = psycopg2.connect(
     host="source-db",
     port=5432,
-    dbname="momo_source",
-    user="momo",
-    password="momo"
+    dbname="fintech_source",
+    user="fintech",
+    password="fintech"
 )
 cur = conn.cursor()
 

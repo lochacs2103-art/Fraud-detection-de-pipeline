@@ -3,12 +3,12 @@
 
 host: source-db
 port: 5432
-database: momo_source
-user: momo
-password: momo
+database: fintech_source
+user: fintech
+password: fintech
 
 # JDBC URL format cho Spark
-jdbc_url: "jdbc:postgresql://source-db:5432/momo_source"
+jdbc_url: "jdbc:postgresql://source-db:5432/fintech_source"
 
 # PostgreSQL JDBC driver class
 driver: "org.postgresql.Driver"

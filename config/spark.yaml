@@ -6,7 +6,7 @@
 # Rule: executor.memory + executor.memoryOverhead < SPARK_WORKER_MEMORY
 #       executor.cores <= SPARK_WORKER_CORES
 
-app_name: momo_fraud_pipeline
+app_name: fintech_fraud_pipeline
 master: spark://spark-master:7077
 # master: local[*]   # uncomment để chạy local
 
