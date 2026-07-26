@@ -1,16 +1,11 @@
 """
-enrich_fraud_labels.py — Join fraud_labels vào staging transactions.
+enrich_fraud_labels.py — Join fraud_labels vào staging transactions theo từng năm.
 
-Tại sao không làm ở bước enrich_transactions_full.py?
-- fraud_labels có 8.9M rows → quá lớn để broadcast (threshold 50MB)
-- Sort-merge join 13.3M × 8.9M trong 1 job → OOM với 2GB executor
-
-Strategy: loop theo năm.
-- Mỗi năm: load ~1.3M transactions + 8.9M fraud_labels → sort-merge join
-- AQE tự optimize shuffle partitions
-- Overwrite đúng partition (dynamic partition overwrite)
-
-is_fraud: "Yes" → True, "No" → False, NULL → NULL (label chưa có)
+Strategy:
+- Đọc từng year partition riêng lẻ (không load 13.3M rows cùng lúc)
+- Dùng basePath để Spark tự thêm partition columns (year/month/day)
+- Sort-merge join với fraud_labels (8.9M rows, cached MEMORY_AND_DISK)
+- Overwrite đúng partition sau khi join
 """
 
 import os
@@ -19,6 +14,7 @@ from pathlib import Path
 import yaml
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from pyspark import StorageLevel
 import structlog
 
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path(__file__).parent.parent.parent))
@@ -27,22 +23,30 @@ logger = structlog.get_logger(__name__)
 YEARS = [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019]
 
 
-def enrich_year_fraud(spark, df_all, year, staging_path, fraud_df):
+def enrich_year_fraud(spark, year, staging_path, fraud_df):
     """Join fraud labels vào 1 năm staging transactions."""
 
-    # Filter từ full DataFrame — partition columns (year/month/day) có sẵn
-    df = df_all.filter(F.col("year") == year)
+    year_path = f"{staging_path}/year={year}"
+
+    # Dùng basePath để Spark tự include partition columns (year/month/day)
+    try:
+        df = spark.read \
+            .option("basePath", staging_path) \
+            .parquet(year_path)
+    except Exception as e:
+        logger.warning("enrich_fraud_labels.year_not_found", year=year, error=str(e))
+        return 0
 
     row_count = df.count()
     if row_count == 0:
-        logger.warning("enrich_fraud_labels.year_not_found", year=year)
+        logger.info("enrich_fraud_labels.year_empty", year=year)
         return 0
 
     # Drop is_fraud nếu đã có (idempotent)
     if "is_fraud" in df.columns:
         df = df.drop("is_fraud")
 
-    # Sort-merge join — AQE tự handle skew và coalesce shuffle partitions
+    # Sort-merge join — AQE tự handle
     df = df.join(fraud_df, on="transaction_id", how="left")
 
     # Cast "Yes"/"No" → BOOLEAN
@@ -53,7 +57,7 @@ def enrich_year_fraud(spark, df_all, year, staging_path, fraud_df):
          .otherwise(F.lit(None).cast("boolean"))
     ).drop("is_fraud_raw")
 
-    # Write lại đúng partition — dynamic overwrite chỉ đụng partition của năm này
+    # Write lại — dynamic overwrite chỉ đụng partitions của năm này
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     df.repartition(F.col("year"), F.col("month"), F.col("day")) \
       .write.mode("overwrite") \
@@ -61,25 +65,26 @@ def enrich_year_fraud(spark, df_all, year, staging_path, fraud_df):
       .partitionBy("year", "month", "day") \
       .parquet(staging_path)
 
-    count = df.count()
-    logger.info("enrich_fraud_labels.year_done", year=year, count=count)
-    return count
+    logger.info("enrich_fraud_labels.year_done", year=year, count=row_count)
+    return row_count
 
 
 def enrich_fraud_labels(spark: SparkSession) -> dict:
     with open(PROJECT_ROOT / "config" / "hdfs.yaml") as f:
         cfg = yaml.safe_load(f)
 
-    staging_path   = cfg["tables"]["transactions"]["staging"]
+    staging_path      = cfg["tables"]["transactions"]["staging"]
     fraud_labels_path = cfg["lake"]["raw"] + "/fraud_labels"
 
-    spark.conf.set("spark.sql.shuffle.partitions", "50")
+    # Giảm shuffle partitions — mỗi year ~1.3M rows không cần nhiều partitions
+    spark.conf.set("spark.sql.shuffle.partitions", "20")
     spark.conf.set("spark.sql.adaptive.enabled", "true")
     spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+    spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
 
     logger.info("enrich_fraud_labels.start")
 
-    # Load fraud labels 1 lần — dùng lại cho tất cả các năm
+    # Load fraud labels 1 lần, cache để dùng lại cho tất cả 10 năm
     fraud_df = spark.read.parquet(fraud_labels_path) \
         .select(
             F.col("transaction_id"),
@@ -90,19 +95,16 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
     fraud_count = fraud_df.count()
     logger.info("enrich_fraud_labels.fraud_loaded", count=fraud_count)
 
-    # Cache fraud_labels — dùng lại nhiều lần, nhưng spill to disk nếu cần
-    from pyspark import StorageLevel
+    # Persist to disk — 8.9M rows không fit vào 2GB heap hoàn toàn
     fraud_df.persist(StorageLevel.MEMORY_AND_DISK)
-
-    # Load staging 1 lần — filter theo year trong hàm
-    df_all = spark.read.parquet(staging_path)
 
     total = 0
     for year in YEARS:
         logger.info("enrich_fraud_labels.processing_year", year=year)
-        count = enrich_year_fraud(spark, df_all, year, staging_path, fraud_df)
+        count = enrich_year_fraud(spark, year, staging_path, fraud_df)
         total += count
-        logger.info("enrich_fraud_labels.progress", year=year, total_so_far=total)
+        logger.info("enrich_fraud_labels.progress",
+                    year=year, year_count=count, total_so_far=total)
 
     fraud_df.unpersist()
 
