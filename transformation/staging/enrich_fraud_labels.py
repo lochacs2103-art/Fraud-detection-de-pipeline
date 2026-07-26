@@ -27,15 +27,14 @@ logger = structlog.get_logger(__name__)
 YEARS = [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019]
 
 
-def enrich_year_fraud(spark, year, staging_path, fraud_df):
+def enrich_year_fraud(spark, df_all, year, staging_path, fraud_df):
     """Join fraud labels vào 1 năm staging transactions."""
 
-    year_path = f"{staging_path}/year={year}"
+    # Filter từ full DataFrame — partition columns (year/month/day) có sẵn
+    df = df_all.filter(F.col("year") == year)
 
-    # Đọc staging của năm này
-    try:
-        df = spark.read.parquet(year_path)
-    except Exception:
+    row_count = df.count()
+    if row_count == 0:
         logger.warning("enrich_fraud_labels.year_not_found", year=year)
         return 0
 
@@ -95,10 +94,13 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
     from pyspark import StorageLevel
     fraud_df.persist(StorageLevel.MEMORY_AND_DISK)
 
+    # Load staging 1 lần — filter theo year trong hàm
+    df_all = spark.read.parquet(staging_path)
+
     total = 0
     for year in YEARS:
         logger.info("enrich_fraud_labels.processing_year", year=year)
-        count = enrich_year_fraud(spark, year, staging_path, fraud_df)
+        count = enrich_year_fraud(spark, df_all, year, staging_path, fraud_df)
         total += count
         logger.info("enrich_fraud_labels.progress", year=year, total_so_far=total)
 
