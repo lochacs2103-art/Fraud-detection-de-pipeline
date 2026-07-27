@@ -11,6 +11,8 @@ Debug nhanh (không cần chạy full 10 năm):
   ENRICH_FRAUD_SKIP_WRITE=1   # optional — join xong không ghi HDFS
 """
 
+from __future__ import annotations
+
 import os
 from functools import reduce
 from pathlib import Path
