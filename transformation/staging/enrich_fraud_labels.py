@@ -37,8 +37,8 @@ def enrich_year_fraud(spark, year, staging_path, fraud_df):
         logger.warning("enrich_fraud_labels.year_not_found", year=year, error=str(e))
         return 0
 
-    row_count = df.count()
-    if row_count == 0:
+    row_count = 0  # không count() để tránh re-execute lineage
+    if not df.take(1):  # fast check — chỉ lấy 1 row
         logger.info("enrich_fraud_labels.year_empty", year=year)
         return 0
 
@@ -46,7 +46,7 @@ def enrich_year_fraud(spark, year, staging_path, fraud_df):
     if "is_fraud" in df.columns:
         df = df.drop("is_fraud")
 
-    # Sort-merge join — AQE tự handle
+    # Join fraud labels — AQE + broadcast threshold 300MB sẽ tự chọn broadcast join
     df = df.join(fraud_df, on="transaction_id", how="left")
 
     # Cast "Yes"/"No" → BOOLEAN
@@ -81,6 +81,9 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
     spark.conf.set("spark.sql.adaptive.enabled", "true")
     spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
     spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
+    # Tăng broadcast threshold — fraud_labels 2 columns ~200MB uncompressed
+    # Broadcast tốt hơn sort-merge join với 2GB executor
+    spark.conf.set("spark.sql.autoBroadcastJoinThreshold", str(300 * 1024 * 1024))
 
     logger.info("enrich_fraud_labels.start")
 
