@@ -88,6 +88,8 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
     logger.info("enrich_fraud_labels.start")
 
     # Load fraud labels 1 lần, cache để dùng lại cho tất cả 10 năm
+    # Không persist vào executor memory — dùng broadcast join thay thế
+    # autoBroadcastJoinThreshold=300MB được set qua spark-submit --conf
     fraud_df = spark.read.parquet(fraud_labels_path) \
         .select(
             F.col("transaction_id"),
@@ -98,9 +100,6 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
     fraud_count = fraud_df.count()
     logger.info("enrich_fraud_labels.fraud_loaded", count=fraud_count)
 
-    # Persist to disk — 8.9M rows không fit vào 2GB heap hoàn toàn
-    fraud_df.persist(StorageLevel.MEMORY_AND_DISK)
-
     total = 0
     for year in YEARS:
         logger.info("enrich_fraud_labels.processing_year", year=year)
@@ -109,7 +108,7 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
         logger.info("enrich_fraud_labels.progress",
                     year=year, year_count=count, total_so_far=total)
 
-    fraud_df.unpersist()
+    fraud_df.unpersist() if fraud_df.is_cached else None
 
     logger.info("enrich_fraud_labels.done", total=total)
     return {"total": total, "fraud_labels_loaded": fraud_count}
