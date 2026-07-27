@@ -83,10 +83,7 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
     spark.conf.set("spark.sql.adaptive.coalescePartitions.enabled", "true")
     # Tăng broadcast threshold — fraud_labels 2 columns ~200MB uncompressed
     spark.conf.set("spark.sql.autoBroadcastJoinThreshold", str(300 * 1024 * 1024))
-    # Tăng heartbeat/network timeout — executor bận GC có thể miss 10s heartbeat
-    spark.conf.set("spark.executor.heartbeatInterval", "30s")
-    spark.conf.set("spark.network.timeout", "300s")
-    spark.conf.set("spark.rpc.askTimeout", "300s")
+    # heartbeat/network timeout phải set qua spark-submit --conf, không set ở đây
 
     logger.info("enrich_fraud_labels.start")
 
