@@ -1,10 +1,11 @@
 """
 enrich_fraud_labels.py — Join fraud_labels vào staging transactions theo từng năm.
 
-Strategy: collect fraud_labels về driver dict, dùng Pandas UDF để lookup.
-- Tránh sort-merge join 8.9M × 1.3M → không OOM, không heartbeat timeout
-- Pandas UDF vectorized: nhanh hơn Python UDF row-by-row
-- Fraud_labels dict fit vào driver memory (2 columns × 8.9M rows ≈ 300MB)
+Strategy: Spark broadcast join với fraud_labels.
+- Select chỉ 2 columns + dropDuplicates → giảm size đáng kể
+- Force broadcast qua F.broadcast() — Spark copy fraud_df lên mỗi executor
+- Không collect về driver, không sort-merge shuffle
+- Mỗi năm: đọc ~1.3M rows, broadcast join → write parquet
 """
 
 import os
@@ -13,7 +14,6 @@ from pathlib import Path
 import yaml
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import BooleanType
 import structlog
 
 PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path(__file__).parent.parent.parent))
@@ -22,8 +22,8 @@ logger = structlog.get_logger(__name__)
 YEARS = [2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019]
 
 
-def enrich_year_fraud(spark, year, staging_path, fraud_broadcast):
-    """Join fraud labels vào 1 năm staging transactions dùng broadcast lookup."""
+def enrich_year_fraud(spark, year, staging_path, fraud_df):
+    """Join fraud labels vào 1 năm staging transactions."""
 
     year_path = f"{staging_path}/year={year}"
 
@@ -43,18 +43,18 @@ def enrich_year_fraud(spark, year, staging_path, fraud_broadcast):
     if "is_fraud" in df.columns:
         df = df.drop("is_fraud")
 
-    # Pandas UDF dùng broadcast variable — không shuffle, không sort-merge join
-    import pandas as pd
-    from pyspark.sql.functions import pandas_udf
+    # Force broadcast join — fraud_df nhỏ hơn transactions
+    df = df.join(F.broadcast(fraud_df), on="transaction_id", how="left")
 
-    @pandas_udf(BooleanType())
-    def lookup_fraud(txn_ids: pd.Series) -> pd.Series:
-        fraud_dict = fraud_broadcast.value
-        return txn_ids.map(lambda tid: fraud_dict.get(str(tid)))
+    # Cast "Yes"/"No" → BOOLEAN
+    df = df.withColumn(
+        "is_fraud",
+        F.when(F.upper(F.col("is_fraud_raw")) == "YES", F.lit(True))
+         .when(F.upper(F.col("is_fraud_raw")) == "NO",  F.lit(False))
+         .otherwise(F.lit(None).cast("boolean"))
+    ).drop("is_fraud_raw")
 
-    df = df.withColumn("is_fraud", lookup_fraud(F.col("transaction_id")))
-
-    # Write lại — dynamic overwrite chỉ đụng partitions của năm này
+    # Write lại partition của năm này
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
     df.repartition(F.col("year"), F.col("month"), F.col("day")) \
       .write.mode("overwrite") \
@@ -77,35 +77,24 @@ def enrich_fraud_labels(spark: SparkSession) -> dict:
 
     logger.info("enrich_fraud_labels.start")
 
-    # Collect fraud_labels về driver → Python dict
-    # 8.9M rows × (transaction_id + is_fraud) ≈ 300MB — fit driver 1GB
-    logger.info("enrich_fraud_labels.collecting_fraud_labels")
-    fraud_rows = spark.read.parquet(fraud_labels_path) \
-        .select("transaction_id", "is_fraud") \
-        .dropDuplicates(["transaction_id"]) \
-        .collect()
+    # Load fraud labels — chỉ 2 columns sau dropDuplicates
+    # Spark broadcast sẽ serialize và copy lên executors
+    fraud_df = spark.read.parquet(fraud_labels_path) \
+        .select(
+            F.col("transaction_id"),
+            F.col("is_fraud").alias("is_fraud_raw")
+        ) \
+        .dropDuplicates(["transaction_id"])
 
-    # Build dict: transaction_id → True/False/None
-    fraud_dict = {}
-    for row in fraud_rows:
-        val = row["is_fraud"]
-        if val is not None:
-            fraud_dict[str(row["transaction_id"])] = (val.upper() == "YES") if isinstance(val, str) else bool(val)
-
-    fraud_count = len(fraud_dict)
-    logger.info("enrich_fraud_labels.fraud_dict_built", count=fraud_count)
-
-    # Broadcast dict lên tất cả executors — 1 lần duy nhất
-    fraud_broadcast = spark.sparkContext.broadcast(fraud_dict)
+    fraud_count = fraud_df.count()
+    logger.info("enrich_fraud_labels.fraud_loaded", count=fraud_count)
 
     total = 0
     for year in YEARS:
         logger.info("enrich_fraud_labels.processing_year", year=year)
-        count = enrich_year_fraud(spark, year, staging_path, fraud_broadcast)
+        count = enrich_year_fraud(spark, year, staging_path, fraud_df)
         total += count
         logger.info("enrich_fraud_labels.progress", year=year, total_so_far=total)
-
-    fraud_broadcast.unpersist()
 
     logger.info("enrich_fraud_labels.done", years_processed=total)
     return {"years_processed": total, "fraud_labels_loaded": fraud_count}
