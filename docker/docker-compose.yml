@@ -158,7 +158,11 @@ services:
       - "10002:10002"
     environment:
       SERVICE_NAME: hiveserver2
+      # Skip Derby schematool — metadata already lives in Postgres via hive-metastore
+      SKIP_SCHEMA_INIT: "true"
       SERVICE_OPTS: "-Dhive.metastore.uris=thrift://hive-metastore:9083"
+    volumes:
+      - ./hive/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
     depends_on:
       hive-metastore:
         condition: service_healthy
