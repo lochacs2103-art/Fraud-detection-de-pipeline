@@ -1,5 +1,3 @@
-version: "3.8"
-
 # ============================================================
 # Fintech Fraud Detection — Full Data Engineering Stack
 # WSL2-compatible: config files baked into images via build context
@@ -150,6 +148,8 @@ services:
       - de_network
 
   hive-server:
+    # Stock image + remote metastore (official pattern). Do NOT mount hive-site.xml
+    # with Postgres JDO here — HS2 then hangs and never binds :10000.
     image: apache/hive:3.1.3
     container_name: hive-server
     hostname: hive-server
@@ -158,11 +158,13 @@ services:
       - "10002:10002"
     environment:
       SERVICE_NAME: hiveserver2
-      # Entrypoint sets SKIP_SCHEMA_INIT="${IS_RESUME:-false}" — must use IS_RESUME
+      # Entrypoint: SKIP_SCHEMA_INIT="${IS_RESUME:-false}"
       IS_RESUME: "true"
-      SERVICE_OPTS: "-Dhive.metastore.uris=thrift://hive-metastore:9083"
-    volumes:
-      - ./hive/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+      SERVICE_OPTS: >-
+        -Dhive.metastore.uris=thrift://hive-metastore:9083
+        -Dhive.execution.engine=mr
+        -Dhive.server2.thrift.bind.host=0.0.0.0
+        -Dhive.server2.thrift.port=10000
     depends_on:
       hive-metastore:
         condition: service_healthy
