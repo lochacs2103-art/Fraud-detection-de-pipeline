@@ -1,15 +1,16 @@
 """
-demo_late_label_story.py — Day1 → Day3 late-arriving fraud label demo.
+demo_late_label_story.py — Day1 → Day3 late-label demo (memory-light).
 
-Story:
-  Day 1 (event): transaction exists, label = No / not fraud in reports.
-  Day 3 (knowledge): label flips to Yes → detect impact → restate only
-  that event partition → before/after snapshots → restore source.
+Does NOT rewrite 8.9M fraud_labels (that OOMs 2GB executors).
+Instead:
+  1. Pick one No/false victim from transaction_index
+  2. Snapshot Day-1 report stats for its event partition
+  3. Write a 1-row impact_manifest (No → Yes)
+  4. Run restate on that knowledge_date (1 partition only)
+  5. Snapshot Day-3 stats + reconcile
+  6. Restore that one txn's is_fraud on the partition
 
-Prints a DEMO_METRICS block for README.
-
-Usage:
-  spark-submit ... scripts/demo_late_label_story.py
+Prints DEMO_METRICS for README.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import yaml
+from pyspark.sql import Row
 from pyspark.sql import functions as F
 import structlog
 
@@ -27,15 +29,11 @@ PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", Path(__file__).resolve().pare
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from transformation.audit.detect_fraud_label_changes import detect_changes
 from transformation.audit.restate_affected_partitions import restate
 from transformation.audit.reconcile_batch import reconcile
 
 logger = structlog.get_logger(__name__)
-
-# Knowledge dates for the story (after baseline 2019-12-31)
 KNOWLEDGE_DAY3 = date(2020, 1, 3)
-KNOWLEDGE_RESTORE = date(2020, 1, 4)
 
 
 def _cfg():
@@ -44,55 +42,29 @@ def _cfg():
 
 
 def _pick_victim(spark, cfg) -> dict:
-    """Pick a labeled-No txn that exists in the transaction index."""
-    fraud_path = cfg["lake"]["raw"] + "/fraud_labels"
     index_path = cfg["tables"]["transaction_index"]["warehouse"]
-
-    labels = spark.read.parquet(fraud_path) \
-        .filter(F.upper(F.col("is_fraud")) == "NO") \
-        .select("transaction_id") \
-        .dropDuplicates(["transaction_id"])
-
+    # Prefer clearly non-fraud rows; fall back to any indexed row
     idx = spark.read.parquet(index_path).select(
         "transaction_id", "event_date", "year", "month", "day", "amount", "is_fraud"
     )
-
-    victim = labels.join(idx, on="transaction_id", how="inner").limit(1).collect()
-    if not victim:
-        raise RuntimeError("No victim transaction found (need No-label ∩ transaction_index)")
-    r = victim[0]
+    victim_df = idx.filter(
+        (F.col("is_fraud") == False) | F.col("is_fraud").isNull()
+    ).limit(1)
+    rows = victim_df.collect()
+    if not rows:
+        rows = idx.limit(1).collect()
+    if not rows:
+        raise RuntimeError("transaction_index is empty — run build_transaction_index --full first")
+    r = rows[0]
     return {
         "transaction_id": r["transaction_id"],
         "event_date": r["event_date"].isoformat() if r["event_date"] else None,
         "year": int(r["year"]),
         "month": int(r["month"]),
         "day": int(r["day"]),
-        "amount": float(r["amount"]) if r["amount"] is not None else None,
+        "amount": float(r["amount"]) if r["amount"] is not None else 0.0,
         "is_fraud_before": r["is_fraud"],
     }
-
-
-def _backup_and_flip(spark, cfg, txn_id: str) -> str:
-    fraud_path = cfg["lake"]["raw"] + "/fraud_labels"
-    backup_path = cfg["lake"]["staging"] + "/.tmp/fraud_labels_demo_backup"
-
-    df = spark.read.parquet(fraud_path)
-    df.write.mode("overwrite").option("compression", "snappy").parquet(backup_path)
-
-    flipped = df.withColumn(
-        "is_fraud",
-        F.when(F.col("transaction_id") == txn_id, F.lit("Yes")).otherwise(F.col("is_fraud")),
-    )
-    flipped.write.mode("overwrite").option("compression", "snappy").parquet(fraud_path)
-    logger.info("demo.flipped_label", transaction_id=txn_id, to="Yes")
-    return backup_path
-
-
-def _restore_labels(spark, cfg, backup_path: str) -> None:
-    fraud_path = cfg["lake"]["raw"] + "/fraud_labels"
-    spark.read.parquet(backup_path) \
-        .write.mode("overwrite").option("compression", "snappy").parquet(fraud_path)
-    logger.info("demo.restored_fraud_labels")
 
 
 def _snapshot_stats(spark, cfg, y: int, m: int, d: int) -> dict:
@@ -101,8 +73,9 @@ def _snapshot_stats(spark, cfg, y: int, m: int, d: int) -> dict:
     row = df.agg(
         F.count("*").alias("total"),
         F.sum(F.when(F.col("is_fraud") == True, 1).otherwise(0)).alias("fraud_n"),
-        F.sum(F.when(F.col("is_fraud") == True, F.col("amount").cast("double")).otherwise(0.0))
-         .alias("fraud_amt"),
+        F.sum(
+            F.when(F.col("is_fraud") == True, F.col("amount").cast("double")).otherwise(0.0)
+        ).alias("fraud_amt"),
     ).collect()[0]
     return {
         "total_txn": int(row["total"]),
@@ -111,12 +84,85 @@ def _snapshot_stats(spark, cfg, y: int, m: int, d: int) -> dict:
     }
 
 
+def _write_one_row_manifest(spark, cfg, victim: dict, knowledge_date: date) -> str:
+    manifest_path = cfg["tables"]["fraud_label_impact_manifest"]["warehouse"]
+    txn_id = victim["transaction_id"]
+    event_date = date(victim["year"], victim["month"], victim["day"])
+    change_id = f"{knowledge_date.isoformat()}_{txn_id}_LABEL_CHANGED"
+    batch_id = f"demo_{knowledge_date.isoformat()}"
+
+    row = Row(
+        change_id=change_id,
+        transaction_id=txn_id,
+        event_date=event_date,
+        knowledge_date=knowledge_date,
+        old_is_fraud=False,
+        new_is_fraud=True,
+        year=victim["year"],
+        month=victim["month"],
+        day=victim["day"],
+        change_type="LABEL_CHANGED",
+        _detected_at=datetime.utcnow(),
+        _batch_id=batch_id,
+        knowledge_year=knowledge_date.year,
+        knowledge_month=knowledge_date.month,
+        knowledge_day=knowledge_date.day,
+    )
+    spark.createDataFrame([row]).repartition(1) \
+        .write.mode("overwrite") \
+        .option("compression", "snappy") \
+        .partitionBy("knowledge_year", "knowledge_month", "knowledge_day") \
+        .parquet(manifest_path)
+    logger.info("demo.manifest_written", change_id=change_id, transaction_id=txn_id)
+    return change_id
+
+
+def _restore_victim_label(spark, cfg, victim: dict, original_is_fraud) -> None:
+    """Put staging + index is_fraud back for the single victim row."""
+    y, m, d = victim["year"], victim["month"], victim["day"]
+    staging_path = cfg["tables"]["transactions"]["staging"]
+    index_path = cfg["tables"]["transaction_index"]["warehouse"]
+    part = f"{staging_path}/year={y}/month={m}/day={d}"
+    txn_id = victim["transaction_id"]
+
+    spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+    df = spark.read.option("basePath", staging_path).parquet(part)
+    restored = df.withColumn(
+        "is_fraud",
+        F.when(F.col("transaction_id") == txn_id, F.lit(original_is_fraud).cast("boolean"))
+         .otherwise(F.col("is_fraud")),
+    )
+    restored.repartition("year", "month", "day") \
+        .write.mode("overwrite") \
+        .option("compression", "snappy") \
+        .partitionBy("year", "month", "day") \
+        .parquet(staging_path)
+
+    try:
+        idx_part = f"{index_path}/year={y}/month={m}/day={d}"
+        idx = spark.read.option("basePath", index_path).parquet(idx_part)
+        idx2 = idx.withColumn(
+            "is_fraud",
+            F.when(F.col("transaction_id") == txn_id, F.lit(original_is_fraud).cast("boolean"))
+             .otherwise(F.col("is_fraud")),
+        )
+        idx2.repartition("year", "month", "day") \
+            .write.mode("overwrite") \
+            .option("compression", "snappy") \
+            .partitionBy("year", "month", "day") \
+            .parquet(index_path)
+    except Exception as e:
+        logger.warning("demo.index_restore_skip", error=str(e))
+
+
 def main(spark) -> dict:
+    spark.conf.set("spark.sql.shuffle.partitions", "8")
     cfg = _cfg()
     victim = _pick_victim(spark, cfg)
     txn_id = victim["transaction_id"]
     y, m, d = victim["year"], victim["month"], victim["day"]
     event_date = date(y, m, d)
+    original = victim["is_fraud_before"]
 
     print("\n=== DEMO VICTIM ===")
     print(victim)
@@ -125,11 +171,9 @@ def main(spark) -> dict:
     print("\n=== DAY1 REPORT (before late label) ===")
     print(before)
 
-    backup = _backup_and_flip(spark, cfg, txn_id)
-
-    detect_day3 = detect_changes(spark, KNOWLEDGE_DAY3)
-    print("\n=== DAY3 DETECT ===")
-    print(detect_day3)
+    change_id = _write_one_row_manifest(spark, cfg, victim, KNOWLEDGE_DAY3)
+    print("\n=== DAY3 IMPACT MANIFEST ===")
+    print({"change_id": change_id, "old_is_fraud": False, "new_is_fraud": True})
 
     restate_day3 = restate(spark, KNOWLEDGE_DAY3)
     print("\n=== DAY3 RESTATE ===")
@@ -139,29 +183,14 @@ def main(spark) -> dict:
     print("\n=== DAY3 REPORT (after restatement) ===")
     print(after)
 
-    # Impact row for victim
-    manifest_path = cfg["tables"]["fraud_label_impact_manifest"]["warehouse"]
-    impact = spark.read.parquet(manifest_path) \
-        .filter(F.col("transaction_id") == txn_id) \
-        .orderBy(F.col("knowledge_date").desc()) \
-        .limit(1)
-    impact_rows = [r.asDict() for r in impact.collect()]
-    print("\n=== IMPACT MANIFEST (victim) ===")
-    print(impact_rows)
-
     recon = reconcile(spark, event_date, KNOWLEDGE_DAY3)
     print("\n=== RECONCILIATION ===")
     print(recon)
 
-    # Restore source labels + restate reverse so lake returns to baseline story state
-    _restore_labels(spark, cfg, backup)
-    detect_restore = detect_changes(spark, KNOWLEDGE_RESTORE)
-    restate_restore = restate(spark, KNOWLEDGE_RESTORE)
-    print("\n=== RESTORE DETECT/RESTATE ===")
-    print(detect_restore)
-    print(restate_restore)
-
+    _restore_victim_label(spark, cfg, victim, original)
     final = _snapshot_stats(spark, cfg, y, m, d)
+    print("\n=== RESTORED STAGING SNAPSHOT ===")
+    print(final)
 
     metrics = {
         "victim_transaction_id": txn_id,
