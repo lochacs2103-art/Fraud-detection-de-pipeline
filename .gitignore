@@ -75,3 +75,8 @@ htmlcov/
 # Hydra outputs
 outputs/
 multirun/
+
+# Local tooling / internal docs — do not publish
+.kiro/
+BATCH_FRAUD_INTELLIGENCE.md
+README_UPGRADE.md
