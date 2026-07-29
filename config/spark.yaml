@@ -14,6 +14,9 @@ configs:
   # ── Hive Metastore ──────────────────────────────────────────
   spark.sql.catalogImplementation: hive
   spark.hive.metastore.uris: thrift://hive-metastore:9083
+  # Builtin client jars are Hive 2.3.9; thrift talks to HMS 3.1.3 server
+  spark.sql.hive.metastore.version: "2.3.9"
+  spark.sql.hive.metastore.jars: builtin
 
   # ── Executor Sizing (DEV — phù hợp Docker worker 4G/4cores) ─
   # executor.memory + memoryOverhead = 2g + 1g = 3g < 4g ✓
