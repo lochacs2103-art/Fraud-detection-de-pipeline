@@ -79,16 +79,10 @@ with DAG(
 
         clean_txn >> enrich_txn
 
-    hive_repair = BashOperator(
+    hive_repair = make_spark_submit(
         task_id="hive_msck_repair",
-        bash_command="""
-            beeline -u jdbc:hive2://hive-server:10000 --silent=true -e "
-                MSCK REPAIR TABLE staging.transactions;
-                MSCK REPAIR TABLE staging.users;
-                MSCK REPAIR TABLE staging.cards;
-                MSCK REPAIR TABLE warehouse.feat_fraud_features;
-            "
-        """,
+        application=f"{PROJECT_ROOT}/scripts/msck_repair.py",
+        extra_conf={"spark.app.name": "msck_repair_{{ ds }}"},
     )
 
     build_features = make_spark_submit(

@@ -114,19 +114,22 @@ hdfs-ls:
 	docker exec namenode hdfs dfs -ls -R /data/lake/
 
 hive-init:
-	@echo "Creating Hive databases and external tables..."
-	cat docker/hive/init_hive_schemas.sql | docker exec -i hive-server \
-		beeline -u jdbc:hive2://localhost:10000 --silent=true
+	@echo "Creating Hive databases and external tables via Spark SQL..."
+	docker exec -e PROJECT_ROOT=/opt/spark/work-dir spark-master \
+		/opt/spark/bin/spark-sql --master local[1] \
+		-f /opt/spark/work-dir/docker/hive/init_hive_schemas.sql
 	@echo "Hive schemas created."
 
 hive-repair:
-	@echo "Syncing Hive partitions..."
-	docker exec hive-server beeline -u jdbc:hive2://localhost:10000 --silent=true -e "\
+	@echo "Syncing Hive partitions via Spark SQL (no hive-server/beeline)..."
+	docker exec -e PROJECT_ROOT=/opt/spark/work-dir spark-master \
+		/opt/spark/bin/spark-sql --master local[1] -e "\
 		MSCK REPAIR TABLE staging.transactions; \
 		MSCK REPAIR TABLE staging.users; \
 		MSCK REPAIR TABLE staging.cards; \
 		MSCK REPAIR TABLE warehouse.feat_fraud_features; \
-	"
+		"
+	@echo "Hive repair complete."
 
 # ---- Pipeline ----
 

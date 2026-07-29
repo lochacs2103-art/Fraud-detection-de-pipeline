@@ -148,8 +148,10 @@ services:
       - de_network
 
   hive-server:
-    # Bypass stock entrypoint (Tez classpath + schematool). Start HS2 directly
-    # with a HS2-only hive-site (no Postgres JDO) so Thrift can bind :10000.
+    # Optional: HS2 Thrift often fails to bind :10000 on this WSL stack.
+    # DDL/MSCK go through Spark SQL + Hive Metastore instead (see Makefile hive-repair).
+    # Enable with: docker compose --profile hive-server up -d hive-server
+    profiles: ["hive-server"]
     image: apache/hive:3.1.3
     container_name: hive-server
     hostname: hive-server
