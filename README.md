@@ -20,6 +20,7 @@ có **late-arriving fraud labels**, **idempotent restatement**, và **reconcilia
 | Fraud-label history (baseline) | **8,914,963** | Knowledge-time ledger (not just event-time) |
 | Reconciliation `unexplained_difference` | **0** | `raw − dup = accepted + quarantined` holds |
 | PIT smoke (`2018-06-15`) | **4,005** features | Self-leakage removed from velocity windows |
+| Late-label demo (`2018-12-25`) | **0 → 1** fraud · **+$51.12** | 1 partition restated; recon still **0** |
 | Years covered | **2010 → 2019** | Static dataset backfill, partition pruned |
 
 ### The `is_fraud = NULL` rescue
@@ -91,15 +92,30 @@ Late chargebacks update history **without rewriting the whole lake** — only im
 
 ## Demo — Day 1 report → Day 3 late fraud label
 
-Spec story from `BATCH_FRAUD_INTELLIGENCE.md`:
+Spec story from `BATCH_FRAUD_INTELLIGENCE.md`, **executed on this lake** via
+`scripts/demo_late_label_story.py`:
 
-1. Day 1: transaction posts, label unknown / Not fraud in the daily report  
-2. Day 3: investigation confirms **Yes**  
-3. Pipeline detects impact → restates **only that event partition** → snapshots before/after  
-4. Reconciliation still **0 unexplained**  
-5. Transaction lands in the investigation queue with reason codes  
+| Step | Result |
+|---|---|
+| Victim transaction | `22293015` |
+| Event date (Day 1) | **2018-12-25** — Christmas Day cohort |
+| Knowledge date (Day 3) | **2020-01-03** |
+| Day-1 daily fraud report | **0** fraud txn · **$0.00** · 4,164 payments that day |
+| Day-3 after late label `No → Yes` | **1** fraud txn · **$51.12** |
+| Delta | **+1** fraud · **+$51.12** |
+| Partitions rewritten | **1** (`year=2018/month=12/day=25` only — not the full lake) |
+| Changes applied (ledger) | **1** |
+| Reconciliation | `unexplained_difference = **0**` · `invariant_ok = true` |
+| Restore | Staging fraud count back to **0** (demo is idempotent / reversible) |
 
-### Run the demo (on the Linux/WSL host)
+### What this proves
+
+1. Historical report on Day 1 stays honest (**0 fraud** that day).  
+2. When knowledge arrives on Day 3, only the **impacted partition** is restated.  
+3. Before/after economics are auditable (**+$51.12** fraud amount).  
+4. Source→staging accounting still balances (**unexplained = 0**).
+
+### Re-run the demo
 
 ```bash
 cd ~/momo-fraud-detection-de-pipeline
@@ -114,19 +130,8 @@ docker exec -e PROJECT_ROOT=/opt/spark/work-dir spark-master \
   /opt/spark/work-dir/scripts/demo_late_label_story.py \
   2>&1 | tee /tmp/demo_late_label.log
 
-# Copy the printed DEMO_METRICS block back for README refresh
-grep -A 20 "DEMO_METRICS" /tmp/demo_late_label.log
+grep -A 20 "DEMO_METRICS\|DONE" /tmp/demo_late_label.log
 ```
-
-| Demo field | Filled after you run the script |
-|---|---|
-| Victim `transaction_id` | _(run demo)_ |
-| Event date | _(run demo)_ |
-| Day-1 fraud count / amount | _(run demo)_ |
-| Day-3 fraud count / amount | _(run demo)_ |
-| Δ fraud txn / amount | _(run demo)_ |
-| Partitions restated | _(run demo)_ |
-| `unexplained_difference` | must be **0** |
 
 ---
 
