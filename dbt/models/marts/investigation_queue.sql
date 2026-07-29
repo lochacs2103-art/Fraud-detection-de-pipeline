@@ -1,8 +1,9 @@
 -- investigation_queue.sql
--- Explainable queue: heuristic risk_score + reason_codes (Trino-safe).
--- All numeric measures CAST to DOUBLE — Hive/Parquet rejects DECIMAL writes.
+-- Explainable queue: heuristic risk_score + reason_codes.
+-- VIEW (not table): avoids Trino Hive Parquet write failures when
+-- feat_fraud_features columns are DECIMAL in metastore but DOUBLE in files.
 
-{{ config(materialized='table') }}
+{{ config(materialized='view') }}
 
 WITH base AS (
     SELECT
@@ -14,12 +15,15 @@ WITH base AS (
         t.is_fraud,
         CAST(f.txn_count_last_1h AS INTEGER) AS txn_count_last_1h,
         CAST(f.txn_count_last_24h AS INTEGER) AS txn_count_last_24h,
-        CAST(f.amount_vs_user_avg_ratio AS DOUBLE) AS amount_vs_user_avg_ratio,
+        -- VARCHAR round-trip forces a true DOUBLE for downstream use
+        TRY_CAST(CAST(f.amount_vs_user_avg_ratio AS VARCHAR) AS DOUBLE)
+            AS amount_vs_user_avg_ratio,
         COALESCE(f.is_night_txn, false) AS is_night_txn,
         COALESCE(f.is_weekend, false) AS is_weekend,
         COALESCE(f.is_foreign_merchant, false) AS is_foreign_merchant,
         COALESCE(f.card_on_dark_web, false) AS card_on_dark_web,
-        CAST(COALESCE(m.fraud_rate, 0) AS DOUBLE) AS merchant_fraud_rate,
+        TRY_CAST(CAST(COALESCE(m.fraud_rate, 0) AS VARCHAR) AS DOUBLE)
+            AS merchant_fraud_rate,
         CAST(m.risk_tier AS VARCHAR) AS merchant_risk_tier,
         t.year,
         t.month,
@@ -36,16 +40,16 @@ scored AS (
         transaction_date,
         user_id,
         merchant_id,
-        CAST(amount AS DOUBLE) AS amount,
+        amount,
         is_fraud,
         txn_count_last_1h,
         txn_count_last_24h,
-        CAST(amount_vs_user_avg_ratio AS DOUBLE) AS amount_vs_user_avg_ratio,
+        amount_vs_user_avg_ratio,
         is_night_txn,
         is_weekend,
         is_foreign_merchant,
         card_on_dark_web,
-        CAST(merchant_fraud_rate AS DOUBLE) AS merchant_fraud_rate,
+        merchant_fraud_rate,
         merchant_risk_tier,
         year,
         month,
@@ -55,9 +59,9 @@ scored AS (
             + (CASE WHEN card_on_dark_web THEN 25 ELSE 0 END)
             + (CASE WHEN is_night_txn THEN 10 ELSE 0 END)
             + (CASE WHEN is_foreign_merchant THEN 10 ELSE 0 END)
-            + (CASE WHEN txn_count_last_1h >= 5 THEN 15 ELSE 0 END)
-            + (CASE WHEN CAST(amount_vs_user_avg_ratio AS DOUBLE) >= 5 THEN 15 ELSE 0 END)
-            + (CASE WHEN CAST(merchant_fraud_rate AS DOUBLE) >= 0.05 THEN 10 ELSE 0 END)
+            + (CASE WHEN COALESCE(txn_count_last_1h, 0) >= 5 THEN 15 ELSE 0 END)
+            + (CASE WHEN COALESCE(amount_vs_user_avg_ratio, 0) >= 5 THEN 15 ELSE 0 END)
+            + (CASE WHEN COALESCE(merchant_fraud_rate, 0) >= 0.05 THEN 10 ELSE 0 END)
         )) AS INTEGER) AS risk_score,
         array_join(
             filter(
@@ -67,9 +71,9 @@ scored AS (
                     CASE WHEN is_night_txn THEN 'NIGHT_TXN' ELSE NULL END,
                     CASE WHEN is_weekend THEN 'WEEKEND_TXN' ELSE NULL END,
                     CASE WHEN is_foreign_merchant THEN 'FOREIGN_MERCHANT' ELSE NULL END,
-                    CASE WHEN txn_count_last_1h >= 5 THEN 'HIGH_VELOCITY_1H' ELSE NULL END,
-                    CASE WHEN CAST(amount_vs_user_avg_ratio AS DOUBLE) >= 5 THEN 'AMOUNT_ANOMALY' ELSE NULL END,
-                    CASE WHEN CAST(merchant_fraud_rate AS DOUBLE) >= 0.05 THEN 'HIGH_MERCHANT_FRAUD_RATE' ELSE NULL END
+                    CASE WHEN COALESCE(txn_count_last_1h, 0) >= 5 THEN 'HIGH_VELOCITY_1H' ELSE NULL END,
+                    CASE WHEN COALESCE(amount_vs_user_avg_ratio, 0) >= 5 THEN 'AMOUNT_ANOMALY' ELSE NULL END,
+                    CASE WHEN COALESCE(merchant_fraud_rate, 0) >= 0.05 THEN 'HIGH_MERCHANT_FRAUD_RATE' ELSE NULL END
                 ],
                 x -> x IS NOT NULL
             ),
@@ -77,27 +81,7 @@ scored AS (
         ) AS reason_codes
     FROM base
 )
-SELECT
-    transaction_id,
-    transaction_date,
-    user_id,
-    merchant_id,
-    CAST(amount AS DOUBLE) AS amount,
-    is_fraud,
-    txn_count_last_1h,
-    txn_count_last_24h,
-    CAST(amount_vs_user_avg_ratio AS DOUBLE) AS amount_vs_user_avg_ratio,
-    is_night_txn,
-    is_weekend,
-    is_foreign_merchant,
-    card_on_dark_web,
-    CAST(merchant_fraud_rate AS DOUBLE) AS merchant_fraud_rate,
-    merchant_risk_tier,
-    risk_score,
-    reason_codes,
-    year,
-    month,
-    day
+SELECT *
 FROM scored
 WHERE is_fraud = true
    OR risk_score >= 30
