@@ -23,13 +23,17 @@ def _apply_pit_features(df: DataFrame) -> DataFrame:
     """Add PIT velocity / anomaly columns. Current txn excluded from history."""
     df = df.withColumn("ts", F.unix_timestamp("transaction_date"))
 
-    w_user = Window.partitionBy("user_id").orderBy("ts", "transaction_id")
-    # Include current row in range, then subtract self → exclude leakage
-    w_1h = w_user.rangeBetween(-3600, Window.currentRow)
-    w_24h = w_user.rangeBetween(-86400, Window.currentRow)
-    w_7d = w_user.rangeBetween(-604800, Window.currentRow)
-    # Prior rows only (never includes current)
-    w_prior = w_user.rowsBetween(Window.unboundedPreceding, -1)
+    # RANGE frames allow only a single ORDER BY expression
+    w_ts = Window.partitionBy("user_id").orderBy("ts")
+    w_1h = w_ts.rangeBetween(-3600, Window.currentRow)
+    w_24h = w_ts.rangeBetween(-86400, Window.currentRow)
+    w_7d = w_ts.rangeBetween(-604800, Window.currentRow)
+    # ROWS frame may use tie-breakers; -1 excludes current row only
+    w_prior = (
+        Window.partitionBy("user_id")
+        .orderBy("ts", "transaction_id")
+        .rowsBetween(Window.unboundedPreceding, -1)
+    )
 
     return (
         df
