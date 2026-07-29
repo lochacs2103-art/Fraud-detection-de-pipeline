@@ -50,6 +50,14 @@ docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/agg_merchant_risk_
 docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/feat_fraud_features
 docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/transaction_event_log
 
+# Auditable Batch Fraud Intelligence
+docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/transaction_index
+docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/fraud_label_history
+docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/fraud_label_impact_manifest
+docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/applied_change_ledger
+docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/daily_fraud_report_snapshots
+docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warehouse/batch_reconciliation_results
+
 docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/warm
 docker exec $NAMENODE hdfs dfs -mkdir -p /data/lake/cold
 

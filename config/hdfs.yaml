@@ -44,3 +44,17 @@ tables:
     staging:   hdfs://namenode:9000/data/lake/staging/mcc_codes
   transaction_event_log:
     warehouse: hdfs://namenode:9000/data/lake/warehouse/transaction_event_log
+
+  # Auditable Batch Fraud Intelligence
+  transaction_index:
+    warehouse: hdfs://namenode:9000/data/lake/warehouse/transaction_index
+  fraud_label_history:
+    warehouse: hdfs://namenode:9000/data/lake/warehouse/fraud_label_history
+  fraud_label_impact_manifest:
+    warehouse: hdfs://namenode:9000/data/lake/warehouse/fraud_label_impact_manifest
+  applied_change_ledger:
+    warehouse: hdfs://namenode:9000/data/lake/warehouse/applied_change_ledger
+  daily_fraud_report_snapshots:
+    warehouse: hdfs://namenode:9000/data/lake/warehouse/daily_fraud_report_snapshots
+  batch_reconciliation_results:
+    warehouse: hdfs://namenode:9000/data/lake/warehouse/batch_reconciliation_results

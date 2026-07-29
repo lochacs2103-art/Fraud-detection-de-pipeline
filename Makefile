@@ -3,8 +3,8 @@
 # Ví dụ: make up, make pipeline
 
 .PHONY: help up down ps logs ingest transform transform-full transform-warehouse \
-        compact hive-init hive-repair dbt-run dbt-test pipeline superset-init \
-        airflow-init airflow-install-dbt test clean
+        compact hive-init hive-repair hive-audit-init hdfs-init-audit dbt-run dbt-test \
+        pipeline superset-init airflow-init airflow-install-dbt test clean
 
 SPARK_MASTER  := spark://spark-master:7077
 SPARK_JAR     := /opt/spark/extra-jars/postgresql-42.7.1.jar
@@ -135,6 +135,27 @@ hive-repair:
 		MSCK REPAIR TABLE warehouse.feat_fraud_features; \
 		"
 	@echo "Hive repair complete."
+
+hdfs-init-audit:
+	@echo "Creating HDFS dirs for audit tables..."
+	docker exec namenode hdfs dfs -mkdir -p /data/lake/warehouse/transaction_index
+	docker exec namenode hdfs dfs -mkdir -p /data/lake/warehouse/fraud_label_history
+	docker exec namenode hdfs dfs -mkdir -p /data/lake/warehouse/fraud_label_impact_manifest
+	docker exec namenode hdfs dfs -mkdir -p /data/lake/warehouse/applied_change_ledger
+	docker exec namenode hdfs dfs -mkdir -p /data/lake/warehouse/daily_fraud_report_snapshots
+	docker exec namenode hdfs dfs -mkdir -p /data/lake/warehouse/batch_reconciliation_results
+	docker exec namenode hdfs dfs -chmod -R 777 /data/lake/warehouse
+	@echo "Audit HDFS dirs ready."
+
+hive-audit-init:
+	@echo "Creating auditable batch fraud Hive tables..."
+	$(MAKE) hdfs-init-audit
+	docker exec -e PROJECT_ROOT=/opt/spark/work-dir spark-master \
+		/opt/spark/bin/spark-sql --master local[1] \
+		--conf spark.sql.hive.metastore.version=2.3.9 \
+		--conf spark.sql.hive.metastore.jars=builtin \
+		-f /opt/spark/work-dir/scripts/sql/create_audit_tables.sql
+	@echo "Audit tables created."
 
 # ---- Pipeline ----
 
